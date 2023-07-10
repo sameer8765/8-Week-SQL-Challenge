@@ -1,0 +1,235 @@
+------------------------------------------------------------------- CLEANING OF RUNNER_ORDERS TABLE -------------------------------------------------------------------------
+
+select * from runner_orders;
+
+SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS 
+  WHERE table_name = 'runner_orders' AND COLUMN_NAME = 'pickup_time';
+
+create table cleaned_runner_orders as
+select order_id, runner_id,
+cast(case 
+         when pickup_time like 'null' then null
+	     else pickup_time end as datetime) as pickup_time,
+cast(case 
+         when distance like '%km' then trim('km' from distance)
+         when distance like 'null' then null
+         else distance end as float) as distance,
+cast(case
+         when duration like 'null' then null
+         when duration like '%mins' then trim('mins' from duration)
+         when duration like '%minute' then trim('minute'from duration)
+         when duration like '%minutes' then trim('minutes'from duration)
+         else duration end as float) as duration,
+case
+    when cancellation in ('','NaN','null') then null
+    else cancellation end as cancellation
+from runner_orders;
+  
+----------------------------------------------------------- CLEANING CUSTOMER ORDERS TABLE --------------------------------------------------------
+
+create table clean_customer_orders as
+select order_id, customer_id, pizza_id, 
+case 
+     when exclusions like 'null' or exclusions like null then ''
+     else exclusions end as exclusions,
+case 
+	 when extras like 'null' or extras like null or extras like 'NaN' then ''
+     else extras end as extras,
+order_time from customer_orders;
+
+------------------------------------------------------------ A. PIZZA METRICS ----------------------------------------------------------------------
+
+1> How many pizzas were ordered?
+
+select count(order_id) as no_of_pizza_ordered from clean_customer_orders;
+
+2> How many unique customer orders were made?
+
+select count(distinct order_id) as no_of_unique_customer from clean_customer_orders;
+
+3> How many successful orders were delivered by each runner?
+
+select runner_id, count(order_id) as successfull_order
+from cleaned_runner_orders 
+where cancellation is null
+group by runner_id;
+
+4> How many of each type of pizza was delivered?
+
+select pizza_id, count(*) as no_of_pizza_delivered
+from cleaned_runner_orders ro join clean_customer_orders co on ro.order_id = co.order_id
+where cancellation is null
+group by pizza_id;
+
+5> How many Vegetarian and Meatlovers were ordered by each customer?
+
+select customer_id, 
+sum(case when pizza_name  = 'Meatlovers' then 1 else 0 end) as Meatlovers,
+sum(case when pizza_name  = 'Vegetarian' then 1 else 0 end) as Vegetarian
+from cleaned_runner_orders ro join clean_customer_orders co on ro.order_id = co.order_id
+join pizza_names pn on co.pizza_id = pn.pizza_id
+where cancellation is null
+group by customer_id
+order by customer_id;
+
+6> What was the maximum number of pizzas delivered in a single order?
+
+with order_count as
+(select co.order_id, count(*) as times_ordered
+from cleaned_runner_orders ro join clean_customer_orders co on ro.order_id = co.order_id
+where cancellation is null
+group by order_id)
+
+select max(times_ordered) as max_count from order_count;
+
+7> For each customer, how many delivered pizzas had at least 1 change and how many had no changes?
+
+select customer_id, 
+sum(case
+        when exclusions = '' and extras = '' then 1 else 0 end) as no_change,
+sum(case
+        when exclusions != '' or extras != '' then 1 else 0 end) as has_change        
+from cleaned_runner_orders ro join clean_customer_orders co on ro.order_id = co.order_id
+where cancellation is null
+group by customer_id
+order by customer_id;
+
+8> How many pizzas were delivered that had both exclusions and extras?
+
+select 
+sum(case
+        when exclusions != '' and extras != '' then 1 else 0 end) as both_exclusion_extras        
+from cleaned_runner_orders ro join clean_customer_orders co on ro.order_id = co.order_id
+where cancellation is null;
+
+9> What was the total volume of pizzas ordered for each hour of the day?
+
+select hour(order_time) as each_hour, count(co.order_id) as volume_ordered
+from cleaned_runner_orders ro join clean_customer_orders co on ro.order_id = co.order_id
+group by each_hour
+order by each_hour;
+
+10> What was the volume of orders for each day of the week?
+
+select dayname(order_time) as week_day, count(co.order_id) as volume_ordered
+from cleaned_runner_orders ro join clean_customer_orders co on ro.order_id = co.order_id
+group by week_day
+order by week_day;
+
+--------------------------------------------------- B. RUNNER AND CUSTOMER EXPERIENCE --------------------------------------------------------------
+
+1> How many runners signed up for each 1 week period?
+
+select week(registration_date) as week_number, count(runner_id) as number
+from runners
+group by week_number;
+
+2> What was the average time in minutes it took for each runner to arrive at the Pizza Runner HQ to pickup the order?
+
+select runner_id, round(avg(time_taken),2) as average_time_taken
+from 
+(select runner_id, timestampdiff(minute,order_time,pickup_time) as time_taken
+from cleaned_runner_orders ro join clean_customer_orders co on ro.order_id = co.order_id where cancellation is null) as a
+group by runner_id
+order by runner_id;
+
+3> Is there any relationship between the number of pizzas and how long the order takes to prepare?
+
+ select pizza_count, round(avg(time_taken),2) as average_time_taken
+from 
+(select ro.order_id, timestampdiff(minute,order_time,pickup_time) as time_taken, count(ro.order_id) as pizza_count
+from cleaned_runner_orders ro join clean_customer_orders co on ro.order_id = co.order_id where cancellation is null
+group by order_id, time_taken) as a
+group by pizza_count
+order by pizza_count;
+
+## means more the pizza more the time taken
+
+4> What was the average distance travelled for each customer?
+
+select customer_id, round(avg(distance),1) as average_distance
+from cleaned_runner_orders ro join clean_customer_orders co on ro.order_id = co.order_id where cancellation is null
+group by customer_id;
+
+5>  What was the difference between the longest and shortest delivery times for all orders?
+
+select max(duration) - min(duration) as difference
+from cleaned_runner_orders;
+
+6> What was the average speed for each runner for each delivery and do you notice any trend for these values?
+
+select runner_id, co.order_id, count(co.order_id), round(avg(distance/duration*60),2) as avg_speed
+from cleaned_runner_orders ro join clean_customer_orders co on ro.order_id = co.order_id where cancellation is null
+group by runner_id, order_id
+order by runner_id;
+
+7> What is the successful delivery percentage for each runner?
+select a.runner_id, total_order_have, delivered_successfully, 
+round(delivered_successfully/total_order_have*100,0) as successfull_percentage
+from
+(select runner_id, count(distinct order_id) as total_order_have
+from cleaned_runner_orders
+group by runner_id) as a 
+join
+(select runner_id, count(distinct order_id) as delivered_successfully
+from cleaned_runner_orders
+where cancellation is null
+group by runner_id) as b
+on a.runner_id = b.runner_id;
+
+------------------------------------------------------------------- C. INGREDIENT OPTIMISATION ----------------------------------------------------------
+SELECT 
+  pr.pizza_id,
+  TRIM(value) AS topping_id,
+  pt.topping_name
+INTO toppingsBreak
+FROM pizza_recipes pr
+  cross  STRING_SPLIT(toppings, ',') AS t
+JOIN pizza_toppings pt
+  ON TRIM(t.value) = pt.topping_id;
+  
+  SELECT regexp_split_to_table(regexp_replace(toppings, '[^0-9,]', '', 'g'), ',') AS integer_value
+FROM pizza_recipes;
+
+SELECT unnest(string_to_array(regexp_replace(toppings, '[^0-9,]', '', 'g'), ',')) AS integer_value
+FROM pizza_recipes;
+
+select toppings from (select substring(toppings,',',1) as toppings from pizza_recipes) as t;
+
+select split(toppings, ',') as toppings from pizza_recipes;
+
+create table toppingsBreak(pizza_id int, toppings_id int, topping_name varchar(20));
+
+SELECT 
+  pr.pizza_id,
+  TRIM(value) AS topping_id,
+  pt.topping_name
+INTO toppingsBreak
+FROM pizza_recipes pr
+  CROSS APPLY STRING_SPLIT(toppings, ',') AS t
+JOIN pizza_toppings pt
+  ON TRIM(t.value) = pt.topping_id;
+  
+  INSERT INTO toppingsBreak (pizza_id, topping_id, topping_name)
+SELECT pr.pizza_id, pt.topping_id, pt.topping_name
+FROM pizza_recipes pr
+JOIN pizza_toppings pt
+ON pt.topping_id in (
+  SELECT TRIM(value)
+  FROM STRING_SPLIT(pr.toppings, ',') AS t
+);
+
+select SUBSTRING_INDEX(toppings,'',1) from pizza_recipes;
+
+SELECT 
+  SUBSTRING_INDEX("9058 Goldfield Avenue\n Yonkers, NY 10701", '\n', 1) 
+    AS address_one,
+  SUBSTRING_INDEX("9058 Goldfield Avenue\n Yonkers, NY 10701", '\n', -1) 
+    AS address_two;
+    
+    SELECT 
+  SUBSTRING_INDEX(toppings, ',', 1) 
+    AS address_one,
+  SUBSTRING_INDEX(toppings, ',', -1) 
+    AS address_two
+    FROM PIZZA_RECIPES;
