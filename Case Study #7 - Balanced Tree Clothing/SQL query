@@ -1,0 +1,250 @@
+ --------------------------------------------------------- HIGH LEVEL SALES ANALYSIS ----------------------------------------------------------------
+  
+  1> What was the total quantity sold for all products?
+        
+		SELECT PRODUCT_ID, SUM(QTY) AS TOTAL_QUANTITY
+		FROM PRODUCT_DETAILS PD 
+		JOIN SALES S ON PD.PRODUCT_ID = S.PROD_ID 
+		GROUP BY PRODUCT_ID;
+		
+		SELECT SUM(QTY) AS TOTAL_QUANTITY
+		FROM SALES; 
+		
+  2> What is the total generated revenue for all products before discounts?
+        
+		SELECT PRODUCT_ID, SUM(QTY*S.PRICE) AS TOTAL_REVENUE_BEFORE_DISCOUNT
+		FROM PRODUCT_DETAILS PD 
+		JOIN SALES S ON PD.PRODUCT_ID = S.PROD_ID 
+		GROUP BY PRODUCT_ID;
+		
+		SELECT SUM(QTY*PRICE) AS TOTAL_REVENUE_BEFORE_DISCOUNT
+		FROM SALES;
+		
+  3> What was the total discount amount for all products?
+  
+        SELECT PRODUCT_ID, CAST(SUM(QTY*S.PRICE*DISCOUNT/100) AS FLOAT) AS TOTAL_DISCOUNT
+		FROM PRODUCT_DETAILS PD 
+		JOIN SALES S ON PD.PRODUCT_ID = S.PROD_ID 
+		GROUP BY PRODUCT_ID;
+		
+		SELECT CAST(SUM(QTY*PRICE*DISCOUNT/100) AS FLOAT) AS TOTAL_DISCOUNT
+		FROM SALES;
+		
+		
+	-------------------------------------------------------- TRANSACTION ANALYSIS ------------------------------------------------------------------
+	
+	1> How many unique transactions were there?
+	
+	SELECT COUNT(DISTINCT TXN_ID) AS NO_OF_UNIQUE_TRANSACTION
+	FROM SALES;
+	
+	2> What is the average unique products purchased in each transaction?
+	
+	SELECT AVG(UNIQUE_PRODUCT) AS AVG_UNIQUE_PRODUCT
+	FROM 
+	(SELECT TXN_ID, COUNT(DISTINCT PROD_ID) AS UNIQUE_PRODUCT
+	FROM SALES
+	GROUP BY TXN_ID) A; 
+	
+	3> What are the 25th, 50th and 75th percentile values for the revenue per transaction?
+	
+	SELECT
+	PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY REVENUE) OVER() AS PCT_25,
+	PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY REVENUE) OVER() AS PCT_50,
+	PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY REVENUE) OVER() AS PCT_75
+	FROM 
+	(SELECT TXN_ID, SUM(CAST(QTY*PRICE*(100-DISCOUNT)/100 AS FLOAT)) AS REVENUE
+	FROM SALES
+	GROUP BY TXN_ID) AS ;
+	
+	4> What is the average discount value per transaction?
+	
+	SELECT CAST(AVG(DISCOUNT_VALUE) AS FLOAT) AS AVG_DISCOUNT
+	FROM 
+	(SELECT TXN_ID, SUM(QTY*PRICE*DISCOUNT/100) AS DISCOUNT_VALUE
+	FROM SALES 
+	GROUP BY TXN_ID) AS A;
+	
+	5> What is the percentage split of all transactions for members vs non-members?
+	
+	WITH MEMBERS_COUNT AS 
+	(SELECT SUM(MEMBER_COUNT) AS MEM_CNT, SUM(NOT_MEMBER_COUNT) AS NT_MEM_CNT 
+	FROM
+	(SELECT TXN_ID, 
+	SUM(CASE WHEN MEMBER = 't' THEN 1 ELSE 0 END) AS MEMBER_COUNT,
+	SUM(CASE WHEN MEMBER = 'f' THEN 1 ELSE 0 END) AS NOT_MEMBER_COUNT
+	FROM SALES
+	GROUP BY TXN_ID) AS A)
+	
+	SELECT (100*MEM_CNT/(MEM_CNT+NT_MEM_CNT)) AS MEM_PERCENTAGE,
+	(100*NT_MEM_CNT/(MEM_CNT+NT_MEM_CNT)) AS NT_MEM_PERCENTAGE
+	FROM MEMBERS_COUNT;
+	
+	OR
+	
+	SELECT 
+         CAST(100.0*COUNT(DISTINCT CASE WHEN member = 1 THEN txn_id END) 
+		      / COUNT(DISTINCT txn_id) AS FLOAT) AS members_pct,
+         CAST(100.0*COUNT(DISTINCT CASE WHEN member = 0 THEN txn_id END)
+		     / COUNT(DISTINCT txn_id) AS FLOAT) AS non_members_pct
+    FROM sales;
+	
+	6> What is the average revenue for member transactions and non-member transactions?
+	
+	SELECT MEMBER,AVG(REVENUE) AS AVG_REVENUE
+    FROM	
+	(SELECT MEMBER, TXN_ID, SUM(PRICE*QTY) AS REVENUE
+	FROM SALES
+	GROUP BY MEMBER, TXN_ID) AS A
+	GROUP BY MEMBER;
+	
+	-------------------------------------------------------- PRODUCT ANALYSIS --------------------------------------------------------------------------
+	
+	1> What are the top 3 products by total revenue before discount?
+	
+	SELECT PRODUCT_NAME, SUM(S.PRICE*QTY) AS TOTAL_REVENUE
+	FROM SALES S
+	JOIN PRODUCT_DETAILS PD ON S.PROD_ID = PD.PRODUCT_ID
+	GROUP BY PRODUCT_NAME
+	ORDER BY TOTAL_REVENUE DESC 
+	LIMIT 3;
+	
+	2> What is the total quantity, revenue and discount for each segment?
+	
+	SELECT SEGMENT_NAME, SUM(QTY) AS TOTAL_QTY, 
+	SUM(S.PRICE*QTY) AS TOTAL_REVENUE,
+	SUM(DISCOUNT) AS TOTAL_DISCOUNT
+	FROM SALES S
+	JOIN PRODUCT_DETAILS PD ON S.PROD_ID = PD.PRODUCT_ID
+	GROUP BY SEGMENT_NAME;
+	
+	3>  What is the top selling product for each segment?
+	
+	WITH SEGMENT_RANK AS
+	(SELECT *, DENSE_RANK() OVER(PARTITION BY SEGMENT_NAME ORDER BY TOTAL_QTY DESC) AS RANKS
+	FROM
+	(SELECT SEGMENT_NAME, PRODUCT_NAME, SUM(QTY) AS TOTAL_QTY
+	FROM SALES S
+	JOIN PRODUCT_DETAILS PD ON S.PROD_ID = PD.PRODUCT_ID
+	GROUP BY SEGMENT_NAME, PRODUCT_NAME) AS A)
+	
+	SELECT * FROM SEGMENT_RANK WHERE RANKS = 1;
+	
+	4> What is the total quantity, revenue and discount for each category?
+	
+	SELECT CATEGORY_NAME, SUM(QTY) AS TOTAL_QTY, 
+	SUM(S.PRICE*QTY) AS TOTAL_REVENUE,
+	SUM(DISCOUNT) AS TOTAL_DISCOUNT
+	FROM SALES S
+	JOIN PRODUCT_DETAILS PD ON S.PROD_ID = PD.PRODUCT_ID
+	GROUP BY CATEGORY_NAME;
+	
+	5> What is the top selling product for each category?
+	
+	WITH CATEGORY_RANK AS
+	(SELECT *, DENSE_RANK() OVER(PARTITION BY CATEGORY_NAME ORDER BY TOTAL_QTY DESC) AS RANKS
+	FROM
+	(SELECT CATEGORY_NAME, PRODUCT_NAME, SUM(QTY) AS TOTAL_QTY
+	FROM SALES S
+	JOIN PRODUCT_DETAILS PD ON S.PROD_ID = PD.PRODUCT_ID
+	GROUP BY CATEGORY_NAME, PRODUCT_NAME) AS A)
+	
+	SELECT * FROM CATEGORY_RANK WHERE RANKS = 1;
+	
+	6> What is the percentage split of revenue by product for each segment?
+	
+	SELECT *, 100*REVENUE/(SUM(REVENUE) OVER(PARTITION BY SEGMENT_NAME )) AS SEGMENT_PRODUCT_PERCENTAGE
+	FROM 
+	(SELECT SEGMENT_NAME, PRODUCT_NAME, SUM(QTY*S.PRICE) AS REVENUE
+	FROM SALES S
+	JOIN PRODUCT_DETAILS PD ON S.PROD_ID = PD.PRODUCT_ID
+	GROUP BY SEGMENT_NAME, PRODUCT_NAME) AS A; 
+	
+	7> What is the percentage split of revenue by segment for each category?
+	
+	SELECT *, 100*REVENUE/(SUM(REVENUE) OVER(PARTITION BY CATEGORY_NAME )) AS SEGMENT_CATEGORY_PERCENTAGE
+	FROM 
+	(SELECT CATEGORY_NAME, SEGMENT_NAME, SUM(QTY*S.PRICE) AS REVENUE
+	FROM SALES S
+	JOIN PRODUCT_DETAILS PD ON S.PROD_ID = PD.PRODUCT_ID
+	GROUP BY CATEGORY_NAME, SEGMENT_NAME) AS A; 
+	
+	8> What is the percentage split of total revenue by category?
+	
+	SELECT *, 100*REVENUE/(SUM(REVENUE) OVER()) AS CATEGORY_PERCENTAGE
+	FROM 
+	(SELECT CATEGORY_NAME, SUM(QTY*S.PRICE) AS REVENUE
+	FROM SALES S
+	JOIN PRODUCT_DETAILS PD ON S.PROD_ID = PD.PRODUCT_ID
+	GROUP BY CATEGORY_NAME) AS A;
+	
+	9> What is the total transaction “penetration” for each product? 
+	(hint: penetration = number of transactions where at least 1 quantity of a product was 
+	 purchased divided by total number of transactions)
+	 
+	WITH PRODUCT_CTE AS 
+	(SELECT PRODUCT_NAME, 
+	COUNT(CASE WHEN QTY >= 1 THEN TXN_ID END) AS QTY_ATLEAST_1,
+	(SELECT COUNT(DISTINCT TXN_ID) FROM SALES) AS TOTAL_TRANSACTION
+	FROM SALES S
+	JOIN PRODUCT_DETAILS PD ON S.PROD_ID = PD.PRODUCT_ID
+	GROUP BY PRODUCT_NAME)
+	
+	SELECT *, (100*QTY_ATLEAST_1/TOTAL_TRANSACTION) AS PENETRATION_PERCENTAGE
+	FROM PRODUCT_CTE;
+	
+	10> What is the most common combination of at least 1 quantity of any 3 products in a 1 single transaction?
+	
+	    SELECT *, ROW_NUMBER() OVER(PARTITION BY TXN_ID) AS RANKS
+	FROM 
+	(SELECT TXN_ID, PRODUCT_NAME, COUNT(QTY) AS QTY_CNT
+	FROM SALES S
+	JOIN PRODUCT_DETAILS PD ON S.PROD_ID = PD.PRODUCT_ID 
+	GROUP BY TXN_ID, PRODUCT_NAME) AS A
+    
+    SELECT 
+    s.txn_id,
+    pd.product_id,
+    pd.product_name,
+    s.qty,
+    COUNT(pd.product_id) OVER (PARTITION BY txn_id) AS cnt
+  FROM sales s
+  JOIN product_details pd 
+  ON s.prod_id = pd.product_id
+  
+  
+  WITH products_per_transaction AS (
+  SELECT 
+    s.txn_id,
+    pd.product_id,
+    pd.product_name,
+    s.qty,
+    COUNT(pd.product_id) OVER (PARTITION BY txn_id) AS cnt
+  FROM sales s
+  JOIN product_details pd 
+  ON s.prod_id = pd.product_id
+),
+
+combinations AS (
+  SELECT 
+    GROUP_CONCAT(product_id ORDER BY product_id SEPARATOR ',')  AS product_ids,
+     GROUP_CONCAT(product_name ORDER BY product_id SEPARATOR ',') AS product_names
+  FROM products_per_transaction
+  WHERE cnt = 3
+  GROUP BY txn_id
+),
+combination_count AS (
+  SELECT 
+    product_ids,
+    product_names,
+    COUNT(*) AS common_combinations
+  FROM combinations
+  GROUP BY product_ids, product_names
+)
+
+SELECT 
+    product_ids,
+    product_names
+FROM combination_count
+WHERE common_combinations = (SELECT MAX(common_combinations) 
+			     FROM combination_count);
