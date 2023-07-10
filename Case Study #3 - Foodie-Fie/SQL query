@@ -1,0 +1,216 @@
+------------------------------------------------------ A. CUSTOMER JOURNEY --------------------------------------------------------------------------
+  
+  select customer_id, s.plan_id, plan_name, price, start_date
+  from subscriptions s join plans p on s.plan_id = p.plan_id;
+  
+  ------------------------------------------------- B. DATA ANALYSIS QUESTIONS -----------------------------------------------------------------------
+  
+  1> How many customers has Foodie-Fi ever had?
+  
+  select count(distinct customer_id) from subscriptions;
+  
+  2> What is the monthly distribution of trial plan start_date values for our dataset - use the start of the month as the group by value
+  
+  select month(start_date) as month_value, count(customer_id)
+  from subscriptions s join plans p on s.plan_id = p.plan_id
+  where plan_name = 'trial'
+  group by month_value
+  order by month_value;
+  
+  3> What plan start_date values occur after the year 2020 for our dataset? Show the breakdown by count of events for each plan_name
+  
+  select year(start_date) as events, plan_name, count(customer_id) as count_of_events
+  from plans p join subscriptions s on p.plan_id = s.plan_id
+  where start_date > '2020-12-31'
+  group by events,plan_name
+  order by count_of_events;
+  
+  4> What is the customer count and percentage of customers who have churned rounded to 1 decimal place?
+  
+  with churn_cte as 
+  (select plan_name, count(customer_id) as churn_count
+  from plans p join subscriptions s on p.plan_id = s.plan_id
+  where plan_name = 'churn'
+  group by plan_name)
+  
+  select plan_name, churn_count, 
+  round((churn_count/(select count(distinct customer_id) as total from plans p join subscriptions s on p.plan_id = s.plan_id)*100),1) as churn_percentage
+  from churn_cte;
+  
+  5> How many customers have churned straight after their initial free trial - what percentage is this rounded to the nearest whole number?
+ 
+ with next_plan as
+(select customer_id, plan_no, lead(plan_no,1) over() as next_plan
+from (select customer_id, p.plan_id as plan_no, sum(price)
+from plans p join subscriptions s on p.plan_id = s.plan_id
+group by customer_id, plan_no) as a),
+
+cte2 as
+(select customer_id, plan_no, next_plan
+from next_plan
+where plan_no = 0 and next_plan = 4)
+
+select COUNT(customer_id) AS churn_after_trial,
+100*COUNT(customer_id) / (SELECT COUNT(DISTINCT customer_id) FROM subscriptions) AS pct
+from cte2;
+
+6> What is the number and percentage of customer plans after their initial free trial?
+with count_cte as
+(select plan_name, count(*) as number
+from plans p join subscriptions s on p.plan_id = s.plan_id
+where plan_name!= 'trial'
+group by plan_name)
+
+select plan_name, number, number*100/(select count(distinct customer_id) from subscriptions) as percentage
+from count_cte;
+
+7> What is the customer count and percentage breakdown of all 5 plan_name values at 2020-12-31?
+
+with next_date_cte as
+(select customer_id,plan_name,s.plan_id, start_date, lead(start_date,1) over(partition by customer_id order by s.plan_id) as next_date
+from plans p join subscriptions s on p.plan_id = s.plan_id)
+
+select plan_id, plan_name, count(*) as customers, (100*count(*)/(select count(distinct customer_id) from subscriptions)) as conversion_rate
+from next_date_cte
+where (next_date is not null and (start_date < '2020-12-31' and next_date > '2020-12-31'))
+ or (next_date is null and start_date < '2020-12-31')
+ group by plan_id, plan_name
+ order by plan_id;
+ 
+ 8> How many customers have upgraded to an annual plan in 2020?
+  
+ SELECT 
+  COUNT(DISTINCT customer_id) AS customer_count
+FROM subscriptions s
+JOIN plans p ON s.plan_id = p.plan_id
+WHERE p.plan_name = 'pro annual'
+  AND YEAR(s.start_date) = 2020;
+  
+9> How many days on average does it take for a customer to an annual plan from the day they join Foodie-Fi?
+
+with annual_date_cte as
+(select customer_id, s.plan_id, plan_name, start_date, lead(start_date,1) over(partition by customer_id order by s.plan_id) as anual_date
+FROM subscriptions s
+JOIN plans p ON s.plan_id = p.plan_id
+where s.plan_id in (0,3)),
+
+diff_days_cte as
+(select *, datediff(anual_date,start_date) as difference_in_days
+from annual_date_cte)
+
+select avg(difference_in_days) as average_days from diff_days_cte;
+
+10> Can you further breakdown this average value into 30 day periods (i.e. 0-30 days, 31-60 days etc)?
+
+WITH trialPlan AS (
+  SELECT 
+    s.customer_id,
+    s.start_date AS trial_date
+  FROM subscriptions s
+  JOIN plans p ON s.plan_id = p.plan_id
+  WHERE p.plan_name = 'trial'
+),
+annualPlan AS (
+  SELECT 
+    s.customer_id,
+    s.start_date AS annual_date
+  FROM subscriptions s
+  JOIN plans p ON s.plan_id = p.plan_id
+  WHERE p.plan_name = 'pro annual'
+),
+datesDiff AS (
+  SELECT 
+    t.customer_id,
+    DATEDIFF(trial_date, annual_date) AS diff
+  FROM trialPlan t
+  JOIN annualPlan a ON t.customer_id = a.customer_id
+),
+daysRecursion AS (
+  SELECT 
+    0 AS start_period, 
+    30 AS end_period
+  UNION ALL
+  SELECT 
+    end_period + 1 AS start_period,
+    end_period + 30 AS end_period
+  FROM daysRecursion
+  WHERE end_period < 360
+)
+
+SELECT 
+  dr.start_period,
+  dr.end_period,
+  COUNT(*) AS customer_count
+FROM daysRecursion dr
+LEFT JOIN datesDiff dd 
+  ON (dd.diff >= dr.start_period AND dd.diff <= dr.end_period)
+GROUP BY dr.start_period, dr.end_period;
+
+11> How many customers downgraded from a pro monthly to a basic monthly plan in 2020?
+
+with downgrade_cte as
+(select customer_id,start_date, s.plan_id, 
+ lead(s.plan_id) over(partition by customer_id order by plan_id) as next_plan
+from subscriptions s join plans p on s.plan_id = p.plan_id
+where s.plan_id in (1,2) and year(start_date) = 2020)
+
+select count(*) as pro_monthly_to_basic
+from downgrade_cte
+where plan_id = 2 and next_plan = 1;
+
+
+----------------------------------------------- D. OUT OF THE BOX QUESTIONS -----------------------------------------------------------------------------
+-------------------------------------------- I DID ALL CALCULATION FOR 2020 -------------------------------------------------------------------------
+
+1. How would you calculate the rate of growth for Foodie-Fi?
+
+with revenue_2020_cte as
+(select month(start_date) as month, sum(price) as revenue
+from subscriptions s join plans p on s.plan_id = p.plan_id
+where year(start_date) = 2020
+group by month
+order by month)
+
+select month, revenue,
+(revenue-LAG(revenue) OVER(ORDER BY month))/revenue AS revenue_growth
+from revenue_2020_cte;
+
+2. What key metrics would you recommend Foodie-Fi management to track over time to assess performance of their overall business?
+
+  * Monthly revenue growth: How does Foodie-Fi's revenue increase or decrease by monthly? Are there any months that the number of customers 
+    increasing significantly?
+  * Customers growth: How many customers increase by monthly? How does the rate look like (x1.5, x2,... after each month)?  
+  * Conversion rate: How many customers keep using Foodie-Fi after trial? How does the rate look like (x1.5, x2,...after each month)?
+  * Churn rate: How many customers cancel the subscription by monthly? What plan they has used?
+  
+3. What are some key customer journeys or experiences that you would analyse further to improve customer retention?
+
+  * Customers who downgraded their plan
+  * Customers who upgraded from basic monthly to pro monthly or pro annual
+  * Customers who cancelled the subscription
+  
+4. If the Foodie-Fi team were to create an exit survey shown to customers who wish to cancel their subscription, what questions would you include
+   in the survey? What is the primary reason for the cancellation?
+   
+  * Price
+  * Techinical issues
+  * Customer support
+  * Found an alternative
+  * Others (please specify)
+  
+how satisfied were you with the subscription? (Likert scale: Very Satisfied - Very Unsatisfied)
+Would you consider using our services in the future? (Likert scale: Very Satisfied - Very Unsatisfied)
+Would you recommend our company to a colleague, friend or family member? (Likert scale: Very Satisfied - Very Unsatisfied)
+
+5. What business levers could the Foodie-Fi team use to reduce the customer churn rate? How would you validate the effectiveness of your ideas?
+
+From the exit survey, look for the most common reasons why customers cancelled the subscription
+
+  * Price: increase the number of discounts in some seasons of a year, extend the trial time, or add more benefits to customers
+  * Service quality: work with the relevant department to fix the issue
+  * Found an alternative: do some competitor analysis to see their competitive advantages over us
+  
+To validate the effectiveness of those ideas, check:
+
+  * Churn rate
+  * Conversion rate
